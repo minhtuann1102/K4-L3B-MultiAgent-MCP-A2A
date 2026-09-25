@@ -83,7 +83,7 @@ async def _order_item_worker(
         trace,
         actor="order-item-agent",
         tool_name=_tool(
-            state["available_tools"], "get_order", "get_order_summary", "resolve_order"
+            state["available_tools"], "get_order"
         ),
         arguments={"order_id": order_id} if order_id else {},
     )
@@ -122,9 +122,7 @@ async def _shipment_worker(
         actor="shipment-agent",
         tool_name=_tool(
             state["available_tools"],
-            "get_shipment",
             "get_shipment_summary",
-            "get_order_shipment",
         ),
         arguments={"order_id": order_id},
     )
@@ -153,8 +151,6 @@ async def _payment_worker(
         tool_name=_tool(
             state["available_tools"],
             "get_order_payments",
-            "get_payment_summary",
-            "get_payments",
         ),
         arguments={"order_id": order_id},
     )
@@ -180,8 +176,8 @@ async def _policy_worker(
         gateway,
         trace,
         actor="policy-agent",
-        tool_name=_tool(state["available_tools"], "get_policy", "get_refund_policy"),
-        arguments={"policy_type": policy_version},
+        tool_name=_tool(state["available_tools"], "get_policy"),
+        arguments={"policy_version": policy_version},
     )
     if evidence:
         state["analysis"]["policy"] = evidence["data"]
@@ -211,7 +207,7 @@ async def _customer_history_worker(
         trace,
         actor="customer-history-agent",
         tool_name=_tool(state["available_tools"], "get_customer_history"),
-        arguments={"customer_id": customer_id},
+        arguments={"customer_unique_id": customer_id},
     )
     if evidence:
         state["analysis"]["customer_history"] = evidence["data"]

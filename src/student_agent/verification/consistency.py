@@ -84,7 +84,7 @@ def verify_consistency(
             f"financial mismatch: refund_lines sum ({lines_total}) != recommended ({rec_refund})"
         )
 
-    captured = payment_data.get("captured_total_brl") or payment_data.get("paid_total_brl")
+    captured = payment_data.get("captured_total_brl") or payment_data.get("paid_total_brl") if isinstance(payment_data, dict) else None
     if (
         captured is not None
         and isinstance(captured, (int, float))

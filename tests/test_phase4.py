@@ -60,7 +60,7 @@ def test_case_2_late_delivery_seller(tmp_path: Path) -> None:
 
     gateway = MockGateway({
         "get_order": {"order_id": "order-2", "order_status": "delivered"},
-        "get_shipment": {
+        "get_shipment_summary": {
             "status": "delivered_late",
             "seller_fault": True,
             "seller_id": "seller_abc",
@@ -92,7 +92,7 @@ def test_case_3_late_delivery_logistics(tmp_path: Path) -> None:
 
     gateway = MockGateway({
         "get_order": {"order_id": "order-3", "order_status": "delivered"},
-        "get_shipment": {"status": "delivered_late", "carrier_fault": True},
+        "get_shipment_summary": {"status": "delivered_late", "carrier_fault": True},
         "get_order_payments": {"captured_total_brl": 80.0},
         "get_policy": {"policy_id": "std-1"},
     })
@@ -121,7 +121,7 @@ def test_case_4_data_conflict_penalizes_confidence(tmp_path: Path) -> None:
             "order_value_brl": 500.0,
             "order_status": "delivered",
         },
-        "get_shipment": {"status": "returned"},
+        "get_shipment_summary": {"status": "returned"},
         "get_order_payments": {"captured_total_brl": 100.0},
         "get_policy": {"policy_id": "std-1"},
     })

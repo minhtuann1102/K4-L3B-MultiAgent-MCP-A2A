@@ -78,15 +78,24 @@ async def _process_case(
 
     target = output_root / f"{case_id}.json"
     trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
+    output = None
     try:
         async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gw:
             output = await _solve_case(case, gw, trace)
         contracts.validate_output(output, f"outputs/{case_id}.json")
         if output.get("case_id") != case_id:
             raise ValueError(f"solver returned a mismatched case_id for {case_id}")
+    except ExceptionGroup as eg:
+        # MCP library raises ExceptionGroup during cleanup on Windows
+        # If output was successfully created, use it; otherwise fall back
+        if output is None or not isinstance(output, dict):
+            print(f"  WARN {case_id}: ExceptionGroup during MCP cleanup, no valid output", file=sys.stderr)
+            output = _fallback_output(case_id)
+        # else: output is valid, ExceptionGroup was just cleanup noise
     except Exception as exc:
         print(f"  WARN {case_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
         output = _fallback_output(case_id)
+    
     temporary = target.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(target)
