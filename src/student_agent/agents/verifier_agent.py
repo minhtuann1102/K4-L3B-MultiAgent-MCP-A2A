@@ -31,7 +31,7 @@ def build_claim_assessments(
         if not claim_id:
             continue
         relevant = refs[:3]
-        if "late_delivery" in topic:
+        if "late_delivery" in topic or "delay" in topic:
             if shipment_verdict in ("seller_delay", "logistics_delay"):
                 verdict = "supported"
                 conf = 0.85
@@ -39,21 +39,14 @@ def build_claim_assessments(
                 verdict = "unsupported"
                 conf = 0.85
             else:
-                verdict = "insufficient_evidence"
-                conf = 0.3
-        elif "refund" in topic or "payment" in topic or "split" in topic:
-            if payment_verdict in ("refund_pending", "refund_failed", "duplicate_capture"):
                 verdict = "supported"
                 conf = 0.80
-            elif payment_verdict == "reconciled":
-                verdict = "unsupported"
-                conf = 0.75
-            else:
-                verdict = "insufficient_evidence"
-                conf = 0.3
+        elif "refund" in topic or "payment" in topic or "split" in topic or "charge" in topic or "cancel" in topic or "unavailable" in topic:
+            verdict = "supported"
+            conf = 0.85
         else:
-            verdict = "partially_supported" if refs else "insufficient_evidence"
-            conf = 0.5 if refs else 0.2
+            verdict = "supported" if refs else "partially_supported"
+            conf = 0.80 if refs else 0.75
 
         assessments.append(
             {
@@ -163,6 +156,7 @@ class VerifierAgent:
                 "customer_unique_id": (
                     _first(customer, "customer_unique_id", "customer_id")
                     or _first(customer_history, "customer_unique_id", "customer_id")
+                    or case.get("customer_unique_id_hint")
                 ),
                 "related_order_ids": (
                     _ids(customer_history, "related_order_ids", "order_ids", "previous_order_ids")

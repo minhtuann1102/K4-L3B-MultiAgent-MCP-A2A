@@ -10,23 +10,23 @@ def calibrate_confidence(
     is_insufficient: bool,
 ) -> float:
     """Calculate calibrated confidence score within [0.0, 0.99]."""
-    if is_insufficient or evidence_count == 0:
-        return min(0.30, 0.08 * evidence_count)
+    if is_insufficient:
+        return 0.30
 
-    score = 0.95
+    score = 0.88
 
     if report.evidence_missing or evidence_count < 3:
-        score -= 0.25
+        score -= 0.08
 
     if report.has_conflicts:
-        score -= 0.20
-
-    if report.policy_ambiguous:
-        score -= 0.15
-
-    if report.warnings:
         score -= 0.10
 
+    if report.policy_ambiguous:
+        score -= 0.05
+
+    if report.warnings:
+        score -= 0.05
+
     # Ensure range bounds and never absolute 1.0
-    clamped = max(0.0, min(score, 0.99))
-    return round(clamped, 3)
+    clamped = max(0.20, min(score, 0.95))
+    return round(clamped, 2)

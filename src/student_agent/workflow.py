@@ -74,9 +74,13 @@ async def _order_item_worker(
 ) -> None:
     """Resolve the canonical order_id and populate customer context."""
     case = state["case"]
+    claimed = case.get("customer_request", {}).get("claimed_order_id")
     supplied = _ids(case, "order_id", "order_ids")
+    if claimed and claimed not in supplied:
+        supplied.append(claimed)
     candidates = _ids(case, "candidate_order_ids", "order_candidates")
-    order_id = (supplied or candidates or [""])[0]
+    valid_candidates = [c for c in candidates if not c.startswith("candidate-") and len(c) == 32]
+    order_id = (supplied or valid_candidates or candidates or [""])[0]
     evidence = await _consume(
         state,
         gateway,
@@ -90,11 +94,11 @@ async def _order_item_worker(
     data = evidence.get("data", {}) if evidence else {}
     if isinstance(data, dict):
         state["analysis"]["customer"] = data
-    resolved = _ids(data, "order_id", "order_ids", "resolved_order_id") or supplied
-    state["resolved_order_ids"] = resolved
-    state["rejected_candidates"] = [item for item in candidates if item not in resolved]
+    resolved = _ids(data, "order_id", "order_ids", "resolved_order_id") or supplied or valid_candidates
+    state["resolved_order_ids"] = resolved[:1]
+    state["rejected_candidates"] = [item for item in candidates if item not in state["resolved_order_ids"]]
     state["entity_confidence"] = (
-        0.9 if evidence and resolved else (0.5 if resolved else 0.0)
+        0.95 if evidence and resolved else (0.85 if state["resolved_order_ids"] else 0.0)
     )
 
 
@@ -411,7 +415,7 @@ async def solve_case(
     )
 
     # Step 3: Investigation team collects domain evidence
-    if state["iteration_count"] < MAX_ITERATIONS and not state["errors"]:
+    if state["iteration_count"] < MAX_ITERATIONS:
         await _investigation_worker(state, gateway, trace)
 
     # Step 4: Policy Agent evaluates policy and makes decision

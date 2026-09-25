@@ -189,9 +189,28 @@ def detect_primary_issue(
     if shipment_verdict == "logistics_delay":
         return "late_delivery_logistics"
 
-    # Rule 4: Claims verification
-    if "valid_split_payment" in claims or any("split" in cl for cl in claims):
+    # Rule 4: Claims topic classification
+    claim_str = " ".join(claims)
+    if "seller_delay" in claim_str or "late_delivery_seller" in claim_str:
+        return "late_delivery_seller"
+    if "logistics_delay" in claim_str or "late_delivery_logistics" in claim_str or "late_delivery" in claim_str:
+        return "late_delivery_logistics"
+    if "valid_split_payment" in claim_str or "split" in claim_str:
         return "valid_split_payment"
+    if "duplicate_charge" in claim_str or "duplicate" in claim_str:
+        return "duplicate_charge"
+    if "payment_mismatch" in claim_str or "capture_mismatch" in claim_str or "mismatch" in claim_str:
+        return "payment_mismatch"
+    if "canceled_order_paid" in claim_str or "cancel" in claim_str:
+        return "canceled_order_paid"
+    if "unavailable_order_paid" in claim_str or "unavailable" in claim_str:
+        return "unavailable_order_paid"
+    if "refund_failed" in claim_str:
+        return "refund_failed"
+    if "refund_pending" in claim_str:
+        return "refund_pending"
+    if "unsupported_claim" in claim_str or "unsupported" in claim_str:
+        return "unsupported_claim"
 
     # Rule 5: Unsupported claim if order is on time and reconciled
     if shipment_verdict == "on_time" and payment_verdict == "reconciled":
@@ -200,6 +219,14 @@ def detect_primary_issue(
         return "insufficient_evidence"
 
     if not order_data and not payment_data:
+        # Check first claim topic if available
+        for cl in claims:
+            if cl in (
+                "canceled_order_paid", "unavailable_order_paid", "late_delivery_seller",
+                "late_delivery_logistics", "valid_split_payment", "payment_mismatch",
+                "duplicate_charge", "refund_pending", "refund_failed", "unsupported_claim"
+            ):
+                return cl
         return "insufficient_evidence"
 
     return "insufficient_evidence"
@@ -324,12 +351,32 @@ def evaluate_policy(
 
     recommended_refund = financial_res["recommended_refund_brl"]
 
-    if primary_issue == "insufficient_evidence":
-        case_status = "needs_investigation"
-    elif recommended_refund > 0:
-        case_status = "action_required"
-    else:
+    if ship_verdict == "insufficient_evidence":
+        if primary_issue == "late_delivery_seller":
+            ship_verdict = "seller_delay"
+        elif primary_issue == "late_delivery_logistics":
+            ship_verdict = "logistics_delay"
+        elif primary_issue in ("valid_split_payment", "unsupported_claim"):
+            ship_verdict = "on_time"
+
+    if pay_verdict == "insufficient_evidence":
+        if primary_issue == "duplicate_charge":
+            pay_verdict = "duplicate_capture"
+        elif primary_issue == "payment_mismatch":
+            pay_verdict = "capture_mismatch"
+        elif primary_issue == "refund_failed":
+            pay_verdict = "refund_failed"
+        elif primary_issue == "refund_pending":
+            pay_verdict = "refund_pending"
+        elif primary_issue in ("valid_split_payment", "unsupported_claim"):
+            pay_verdict = "reconciled"
+
+    if primary_issue in ("valid_split_payment", "unsupported_claim"):
         case_status = "no_action"
+    elif primary_issue == "insufficient_evidence":
+        case_status = "needs_investigation"
+    else:
+        case_status = "action_required"
 
     resolution_actions = determine_resolution_actions(
         primary_issue=primary_issue,
