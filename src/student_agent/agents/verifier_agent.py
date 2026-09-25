@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..policy.engine import PolicyDecision, _bool_val, _first, _ids, _number
+from ..policy.engine import PolicyDecision, _bool_val, _first, _ids, _normalize_payment_data, _number
 from ..state import ComplaintState
 from ..verification.confidence import calibrate_confidence
 from ..verification.consistency import ConsistencyReport, verify_consistency
@@ -11,6 +11,7 @@ from ..verification.consistency import ConsistencyReport, verify_consistency
 
 def build_claim_assessments(
     case: dict[str, Any],
+    primary_issue: str,
     shipment_verdict: str,
     payment_verdict: str,
     refs: list[str],
@@ -31,19 +32,45 @@ def build_claim_assessments(
         if not claim_id:
             continue
         relevant = refs[:3]
-        if "late_delivery" in topic or "delay" in topic:
-            if shipment_verdict in ("seller_delay", "logistics_delay"):
+
+        if topic == "requested_full_refund":
+            if primary_issue in ("canceled_order_paid", "unavailable_order_paid"):
                 verdict = "supported"
+                conf = 0.90
+            elif primary_issue in (
+                "late_delivery_seller",
+                "late_delivery_logistics",
+                "duplicate_charge",
+            ):
+                verdict = "partially_supported"
                 conf = 0.85
+            elif primary_issue in ("refund_pending", "refund_failed"):
+                verdict = "supported"
+                conf = 0.88
+            else:
+                verdict = "unsupported"
+                conf = 0.85
+        elif topic == "unsupported_claim":
+            verdict = "unsupported"
+            conf = 0.88
+        elif topic == primary_issue:
+            verdict = "supported"
+            conf = 0.92
+        elif "late_delivery" in topic or "delay" in topic:
+            if primary_issue.startswith("late_delivery"):
+                verdict = "supported"
+                conf = 0.90
             elif shipment_verdict == "on_time":
                 verdict = "unsupported"
                 conf = 0.85
             else:
                 verdict = "supported"
-                conf = 0.80
-        elif "refund" in topic or "payment" in topic or "split" in topic or "charge" in topic or "cancel" in topic or "unavailable" in topic:
+                conf = 0.85
+        elif any(
+            k in topic for k in ("refund", "payment", "split", "charge", "cancel", "unavailable")
+        ):
             verdict = "supported"
-            conf = 0.85
+            conf = 0.88
         else:
             verdict = "supported" if refs else "partially_supported"
             conf = 0.80 if refs else 0.75
@@ -79,10 +106,12 @@ class VerifierAgent:
 
         # Calibrate confidence
         is_insufficient = decision.primary_issue == "insufficient_evidence"
-        confidence = calibrate_confidence(report, len(refs), is_insufficient)
+        confidence = calibrate_confidence(
+            report, len(refs), is_insufficient, primary_issue=decision.primary_issue
+        )
 
         shipment = analysis.get("shipment", {}) or {}
-        payment = analysis.get("payment", {}) or {}
+        payment = _normalize_payment_data(analysis.get("payment") or {})
         customer = analysis.get("customer", {}) or {}
         items = analysis.get("items", {}) or {}
         sellers = analysis.get("sellers", {}) or {}
@@ -94,6 +123,14 @@ class VerifierAgent:
         seller_ids = _ids(sellers, "seller_ids", "seller_id") or _ids(
             shipment, "seller_ids", "seller_id"
         )
+        # Also collect seller_ids from responsible_parties
+        if not seller_ids:
+            for party in decision.responsible_parties:
+                if isinstance(party, dict) and party.get("party_type") == "seller":
+                    pid = party.get("party_id")
+                    if pid and isinstance(pid, str):
+                        seller_ids = [pid]
+                        break
         shipment_ids = _ids(shipment, "shipment_ids", "shipment_id")
         payment_refs = (
             _ids(payment, "payment_references", "payment_id", "payment_ids")
@@ -110,7 +147,10 @@ class VerifierAgent:
         )
         timeline_complete = (
             _bool_val(shipment, "timeline_complete", "timeline_full") is True
-            or bool(_first(shipment, "delivered_at", "actual_delivery_date"))
+            or bool(_first(
+                shipment, "delivered_at", "actual_delivery_date",
+                "delivered_customer_at", "order_delivered_customer_date"
+            ))
         )
 
         captured = _number(
@@ -125,6 +165,7 @@ class VerifierAgent:
 
         claim_assessments = build_claim_assessments(
             case=case,
+            primary_issue=decision.primary_issue,
             shipment_verdict=decision.shipment_verdict,
             payment_verdict=decision.payment_verdict,
             refs=refs,

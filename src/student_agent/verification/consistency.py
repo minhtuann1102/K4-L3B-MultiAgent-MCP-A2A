@@ -48,6 +48,8 @@ def verify_consistency(
     payment_issues = ("payment_mismatch", "duplicate_charge", "refund_failed")
     if decision.primary_issue in payment_issues and "payment_provider" not in party_types:
         warnings.append(f"{decision.primary_issue} missing payment_provider party")
+    if decision.primary_issue == "refund_pending" and "platform" not in party_types:
+        warnings.append("refund_pending without platform party")
 
     # Check 2: Issue <-> Evidence support
     if decision.primary_issue == "canceled_order_paid":
@@ -84,7 +86,11 @@ def verify_consistency(
             f"financial mismatch: refund_lines sum ({lines_total}) != recommended ({rec_refund})"
         )
 
-    captured = payment_data.get("captured_total_brl") or payment_data.get("paid_total_brl") if isinstance(payment_data, dict) else None
+    captured = (
+        payment_data.get("captured_total_brl") or payment_data.get("paid_total_brl")
+        if isinstance(payment_data, dict)
+        else None
+    )
     if (
         captured is not None
         and isinstance(captured, (int, float))

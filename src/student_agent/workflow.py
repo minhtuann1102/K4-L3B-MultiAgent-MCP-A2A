@@ -12,6 +12,7 @@ Design invariants:
 """
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from .agents import PolicyAgent, VerifierAgent
@@ -52,6 +53,10 @@ async def _consume(
     if evidence is None:
         error_name = type(last_error).__name__ if last_error else "UnknownError"
         state["errors"] = [*state["errors"], f"{actor}:{error_name}"]
+        print(
+            f"  MCP-FAIL {state['case_id']}: {tool_name} -> {error_name}: {str(last_error)[:200]}",
+            file=sys.stderr,
+        )
         return None
     state["evidence"] = [*state["evidence"], evidence]
     trace.emit(
@@ -94,9 +99,15 @@ async def _order_item_worker(
     data = evidence.get("data", {}) if evidence else {}
     if isinstance(data, dict):
         state["analysis"]["customer"] = data
-    resolved = _ids(data, "order_id", "order_ids", "resolved_order_id") or supplied or valid_candidates
+    resolved = (
+        _ids(data, "order_id", "order_ids", "resolved_order_id")
+        or supplied
+        or valid_candidates
+    )
     state["resolved_order_ids"] = resolved[:1]
-    state["rejected_candidates"] = [item for item in candidates if item not in state["resolved_order_ids"]]
+    state["rejected_candidates"] = [
+        item for item in candidates if item not in state["resolved_order_ids"]
+    ]
     state["entity_confidence"] = (
         0.95 if evidence and resolved else (0.85 if state["resolved_order_ids"] else 0.0)
     )
@@ -347,23 +358,51 @@ async def _product_context_worker(
 async def _investigation_worker(
     state: ComplaintState, gateway: EvidenceGateway, trace: TraceWriter
 ) -> None:
-    """Run specialist domain agents in sequence under iteration cap."""
+    """Run specialist domain agents selectively based on claim topics to maximize efficiency."""
     order_id = state["resolved_order_ids"][0] if state["resolved_order_ids"] else ""
     if not order_id:
         return
-    for worker in (
-        lambda: _shipment_worker(state, gateway, trace, order_id),
-        lambda: _payment_worker(state, gateway, trace, order_id),
-        lambda: _policy_worker(state, gateway, trace),
-        lambda: _customer_history_worker(state, gateway, trace, order_id),
-        lambda: _items_worker(state, gateway, trace, order_id),
-        lambda: _sellers_worker(state, gateway, trace, order_id),
-        lambda: _payment_timeline_worker(state, gateway, trace, order_id),
-        lambda: _refund_timeline_worker(state, gateway, trace, order_id),
-        lambda: _product_context_worker(state, gateway, trace, order_id),
-    ):
-        # Only the iteration cap stops expansion; individual failures are recorded
-        # in state["errors"] but must not silence all remaining specialist agents.
+
+    claims = [
+        str(c.get("topic", "")).lower()
+        for c in (state["case"].get("customer_request", {}) or {}).get("claims", [])
+        if isinstance(c, dict)
+    ]
+    core_claims = [
+        c for c in claims if c not in ("requested_full_refund", "full_refund", "refund_request")
+    ]
+    primary_claim = core_claims[0] if core_claims else (claims[0] if claims else "")
+
+    workers_to_run = []
+
+    if not primary_claim:
+        # Fallback for generic cases or unit tests without claims
+        workers_to_run = [
+            lambda: _shipment_worker(state, gateway, trace, order_id),
+            lambda: _payment_worker(state, gateway, trace, order_id),
+            lambda: _policy_worker(state, gateway, trace),
+        ]
+    else:
+        # Shipment worker: only for delivery or unsupported claims
+        delivery_keywords = ("delivery", "delay", "shipment", "logistics")
+        if any(k in primary_claim for k in delivery_keywords):
+            workers_to_run.append(lambda: _shipment_worker(state, gateway, trace, order_id))
+
+        # Payment worker: needed for all payment & financial reconciliation
+        workers_to_run.append(lambda: _payment_worker(state, gateway, trace, order_id))
+
+        # Policy worker: needed for policy rules & refund limits
+        workers_to_run.append(lambda: _policy_worker(state, gateway, trace))
+
+        # Targeted secondary specialists:
+        if "seller" in primary_claim:
+            workers_to_run.append(lambda: _sellers_worker(state, gateway, trace, order_id))
+        elif any(k in primary_claim for k in ("duplicate", "mismatch")):
+            workers_to_run.append(lambda: _payment_timeline_worker(state, gateway, trace, order_id))
+        elif any(k in primary_claim for k in ("refund_pending", "refund_failed")):
+            workers_to_run.append(lambda: _refund_timeline_worker(state, gateway, trace, order_id))
+
+    for worker in workers_to_run:
         if state["iteration_count"] >= MAX_ITERATIONS:
             break
         await worker()
