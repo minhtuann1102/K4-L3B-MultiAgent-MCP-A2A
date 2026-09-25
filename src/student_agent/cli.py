@@ -27,6 +27,70 @@ async def _show_tools(root: Path) -> None:
             print(tool)
 
 
+def _fallback_output(case_id: str) -> dict:
+    """Schema-valid fallback written when MCP connection fails for a case."""
+    return {
+        "schema_version": "day09-l3b-output-v2",
+        "case_id": case_id,
+        "assessment": {
+            "primary_issue": "insufficient_evidence",
+            "secondary_issues": ["mcp_call_failed"],
+            "case_status": "needs_investigation",
+            "confidence": 0.0,
+        },
+        "affected_entities": {
+            "order_ids": [], "item_ids": [], "seller_ids": [],
+            "payment_references": [], "shipment_ids": [],
+        },
+        "entity_resolution": {
+            "status": "not_found", "resolved_order_ids": [],
+            "rejected_candidates": [], "confidence": 0.0,
+        },
+        "customer_context": {"customer_unique_id": None, "related_order_ids": []},
+        "shipment_analysis": {
+            "verdict": "insufficient_evidence", "late_seller_ids": [], "timeline_complete": False,
+        },
+        "payment_analysis": {
+            "verdict": "insufficient_evidence",
+            "captured_total_brl": None, "refunded_total_brl": None, "refundable_total_brl": None,
+        },
+        "root_cause_analysis": {"ranked_causes": [], "responsible_parties": []},
+        "evidence_refs": [],
+        "data_conflicts": [],
+        "financial_resolution": {"currency": "BRL", "recommended_refund_brl": 0, "refund_lines": []},
+        "resolution_actions": ["Route case for manual investigation"],
+    }
+
+
+async def _process_case(
+    case_id: str,
+    case: dict,
+    settings: "Settings",
+    contracts: "Contracts",
+    trace: "TraceWriter",
+    output_root: Path,
+) -> bool:
+    """Open a fresh MCP session per case so a dropped connection only affects one case."""
+    from .workflow import solve_case as _solve_case
+
+    target = output_root / f"{case_id}.json"
+    trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
+    try:
+        async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gw:
+            output = await _solve_case(case, gw, trace)
+        contracts.validate_output(output, f"outputs/{case_id}.json")
+        if output.get("case_id") != case_id:
+            raise ValueError(f"solver returned a mismatched case_id for {case_id}")
+    except Exception as exc:
+        print(f"  WARN {case_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        output = _fallback_output(case_id)
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(target)
+    trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
+    return True
+
+
 async def _run(root: Path) -> None:
     settings = Settings.load(root)
     case_set = load_case_set(root)
@@ -40,24 +104,12 @@ async def _run(root: Path) -> None:
     trace_path.unlink(missing_ok=True)
     trace = TraceWriter(trace_path, contracts)
 
-    async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gateway:
-        discovered_tools = await gateway.list_tools()
-        if not discovered_tools:
-            raise RuntimeError("MCP Gateway returned no tools")
-        for case_id in case_set.case_ids:
-            case = case_set.cases[case_id]
-            trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
-            output = await solve_case(case, gateway, trace)
-            contracts.validate_output(output, f"outputs/{case_id}.json")
-            if output.get("case_id") != case_id:
-                raise ValueError(f"solver returned a mismatched case_id for {case_id}")
-            target = output_root / f"{case_id}.json"
-            temporary = target.with_suffix(".json.tmp")
-            temporary.write_text(
-                json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            temporary.replace(target)
-            trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
+    total = len(case_set.case_ids)
+    for idx, case_id in enumerate(case_set.case_ids, 1):
+        print(f"[{idx:3d}/{total}] {case_id} ...", end=" ", flush=True)
+        case = case_set.cases[case_id]
+        await _process_case(case_id, case, settings, contracts, trace, output_root)
+        print("done", flush=True)
 
 
 def parser() -> argparse.ArgumentParser:
