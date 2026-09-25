@@ -456,7 +456,9 @@ async def _investigation_worker(
         lambda: _refund_timeline_worker(state, gateway, trace, order_id),
         lambda: _product_context_worker(state, gateway, trace, order_id),
     ):
-        if state["iteration_count"] >= MAX_ITERATIONS or state["errors"]:
+        # Only the iteration cap stops expansion; individual failures are recorded
+        # in state["errors"] but must not silence all remaining specialist agents.
+        if state["iteration_count"] >= MAX_ITERATIONS:
             break
         await worker()
 
@@ -1010,8 +1012,9 @@ async def solve_case(
         target="investigation-team",
     )
 
-    # Step 3: investigation team (shipment / payment / policy)
-    if state["iteration_count"] < MAX_ITERATIONS and not state["errors"]:
+    # Step 3: investigation team runs regardless of order-agent result;
+    # each specialist agent is independent and records its own errors.
+    if state["iteration_count"] < MAX_ITERATIONS:
         await _investigation_worker(state, gateway, trace)
 
     # Step 4: verifier assembles output from evidence only
