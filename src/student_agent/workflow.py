@@ -127,6 +127,7 @@ async def _shipment_worker(
         tool_name=_tool(
             state["available_tools"],
             "get_shipment_summary",
+            "get_shipment",
         ),
         arguments={"order_id": order_id},
     )

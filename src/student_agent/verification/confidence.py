@@ -13,10 +13,10 @@ def calibrate_confidence(
     if is_insufficient:
         return 0.30
 
-    score = 0.88
+    score = 0.95
 
     if report.evidence_missing or evidence_count < 3:
-        score -= 0.08
+        score -= 0.15
 
     if report.has_conflicts:
         score -= 0.10
