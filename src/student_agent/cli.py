@@ -12,7 +12,6 @@ from .contracts import Contracts
 from .mcp_gateway import connect_gateway
 from .submission import package_submission, validate_artifacts
 from .trace import TraceWriter
-from .workflow import solve_case
 
 
 def _root(value: str) -> Path:
@@ -57,7 +56,11 @@ def _fallback_output(case_id: str) -> dict:
         "root_cause_analysis": {"ranked_causes": [], "responsible_parties": []},
         "evidence_refs": [],
         "data_conflicts": [],
-        "financial_resolution": {"currency": "BRL", "recommended_refund_brl": 0, "refund_lines": []},
+        "financial_resolution": {
+            "currency": "BRL",
+            "recommended_refund_brl": 0,
+            "refund_lines": [],
+        },
         "resolution_actions": ["Route case for manual investigation"],
     }
 
@@ -65,9 +68,9 @@ def _fallback_output(case_id: str) -> dict:
 async def _process_case(
     case_id: str,
     case: dict,
-    settings: "Settings",
-    contracts: "Contracts",
-    trace: "TraceWriter",
+    settings: Settings,
+    contracts: Contracts,
+    trace: TraceWriter,
     output_root: Path,
 ) -> bool:
     """Open a fresh MCP session per case so a dropped connection only affects one case."""
