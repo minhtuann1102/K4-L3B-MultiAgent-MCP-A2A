@@ -381,6 +381,7 @@ async def _investigation_worker(
             lambda: _shipment_worker(state, gateway, trace, order_id),
             lambda: _payment_worker(state, gateway, trace, order_id),
             lambda: _policy_worker(state, gateway, trace),
+            lambda: _items_worker(state, gateway, trace, order_id),
         ]
     else:
         # Shipment worker: only for delivery or unsupported claims
@@ -394,10 +395,11 @@ async def _investigation_worker(
         # Policy worker: needed for policy rules & refund limits
         workers_to_run.append(lambda: _policy_worker(state, gateway, trace))
 
+        # Items worker: always run to populate item_ids, seller_ids, product_ids
+        workers_to_run.append(lambda: _items_worker(state, gateway, trace, order_id))
+
         # Targeted secondary specialists:
-        if "seller" in primary_claim:
-            workers_to_run.append(lambda: _sellers_worker(state, gateway, trace, order_id))
-        elif any(k in primary_claim for k in ("duplicate", "mismatch")):
+        if any(k in primary_claim for k in ("duplicate", "mismatch")):
             workers_to_run.append(lambda: _payment_timeline_worker(state, gateway, trace, order_id))
         elif any(k in primary_claim for k in ("refund_pending", "refund_failed")):
             workers_to_run.append(lambda: _refund_timeline_worker(state, gateway, trace, order_id))
@@ -414,14 +416,17 @@ async def _investigation_worker(
 
 
 async def solve_case(
-    case: dict[str, Any], gateway: EvidenceGateway, trace: TraceWriter
+    case: dict[str, Any],
+    gateway: EvidenceGateway,
+    trace: TraceWriter,
+    cached_tools: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Execute complete multi-agent workflow: Specialists -> Policy -> Verifier."""
     case_id = case.get("case_id")
     if not isinstance(case_id, str) or not case_id:
         raise ValueError("case must contain a non-empty case_id")
 
-    tools = tuple(await gateway.list_tools())
+    tools = cached_tools if cached_tools is not None else tuple(await gateway.list_tools())
     state: ComplaintState = {
         "case_id": case_id,
         "case": case,

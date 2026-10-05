@@ -72,35 +72,42 @@ async def _process_case(
     contracts: Contracts,
     trace: TraceWriter,
     output_root: Path,
-) -> bool:
+    cached_tools: "tuple[str, ...] | None" = None,
+) -> "tuple[str, ...] | None":
     """Open a fresh MCP session per case so a dropped connection only affects one case."""
     from .workflow import solve_case as _solve_case
 
     target = output_root / f"{case_id}.json"
     trace.emit(case_id=case_id, event_type="case_received", actor="coordinator")
     output = None
+    fetched_tools: "tuple[str, ...] | None" = cached_tools
     try:
         async with connect_gateway(settings.mcp_endpoint, settings.team_api_key, contracts) as gw:
-            output = await _solve_case(case, gw, trace)
+            if cached_tools is None:
+                fetched_tools = tuple(await gw.list_tools())
+            output = await _solve_case(case, gw, trace, cached_tools=fetched_tools)
         contracts.validate_output(output, f"outputs/{case_id}.json")
         if output.get("case_id") != case_id:
             raise ValueError(f"solver returned a mismatched case_id for {case_id}")
-    except ExceptionGroup as eg:
+    except ExceptionGroup:
         # MCP library raises ExceptionGroup during cleanup on Windows
         # If output was successfully created, use it; otherwise fall back
         if output is None or not isinstance(output, dict):
-            print(f"  WARN {case_id}: ExceptionGroup during MCP cleanup, no valid output", file=sys.stderr)
+            print(
+                f"  WARN {case_id}: ExceptionGroup during MCP cleanup, no valid output",
+                file=sys.stderr,
+            )
             output = _fallback_output(case_id)
         # else: output is valid, ExceptionGroup was just cleanup noise
     except Exception as exc:
         print(f"  WARN {case_id}: {type(exc).__name__}: {exc}", file=sys.stderr)
         output = _fallback_output(case_id)
-    
+
     temporary = target.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(target)
     trace.emit(case_id=case_id, event_type="case_finalized", actor="coordinator")
-    return True
+    return fetched_tools
 
 
 async def _run(root: Path) -> None:
@@ -117,10 +124,11 @@ async def _run(root: Path) -> None:
     trace = TraceWriter(trace_path, contracts)
 
     total = len(case_set.case_ids)
+    tools_cache = None
     for idx, case_id in enumerate(case_set.case_ids, 1):
         print(f"[{idx:3d}/{total}] {case_id} ...", end=" ", flush=True)
         case = case_set.cases[case_id]
-        await _process_case(case_id, case, settings, contracts, trace, output_root)
+        tools_cache = await _process_case(case_id, case, settings, contracts, trace, output_root, tools_cache)
         print("done", flush=True)
 
 

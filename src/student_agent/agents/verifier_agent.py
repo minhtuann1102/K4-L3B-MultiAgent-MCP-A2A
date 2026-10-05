@@ -9,6 +9,26 @@ from ..verification.confidence import calibrate_confidence
 from ..verification.consistency import ConsistencyReport, verify_consistency
 
 
+def _extract_ids_from_list(data: Any, *fields: str) -> list[str]:
+    """Extract IDs from a list-of-dicts or a dict, checking the given field names."""
+    if isinstance(data, dict):
+        return _ids(data, *fields)
+    if isinstance(data, list):
+        result: list[str] = []
+        for item in data:
+            if isinstance(item, dict):
+                for f in fields:
+                    val = item.get(f)
+                    if isinstance(val, str) and val:
+                        result.append(val)
+                    elif isinstance(val, int) and val:
+                        result.append(str(val))
+                    elif isinstance(val, list):
+                        result.extend(v for v in val if isinstance(v, str) and v)
+        return list(dict.fromkeys(result))[:20]
+    return []
+
+
 def build_claim_assessments(
     case: dict[str, Any],
     primary_issue: str,
@@ -111,17 +131,25 @@ class VerifierAgent:
         )
 
         shipment = analysis.get("shipment", {}) or {}
-        payment = _normalize_payment_data(analysis.get("payment") or {})
+        raw_payment = analysis.get("payment") or {}
+        payment = _normalize_payment_data(raw_payment)
         customer = analysis.get("customer", {}) or {}
-        items = analysis.get("items", {}) or {}
+        # items data may be a list (e.g. get_order_items returns a list-of-dicts)
+        items_raw = analysis.get("items") or {}
+        items = items_raw if isinstance(items_raw, dict) else {}
         sellers = analysis.get("sellers", {}) or {}
         customer_history = analysis.get("customer_history", {}) or {}
         payment_timeline = analysis.get("payment_timeline", {}) or {}
         product_context = analysis.get("product_context", {}) or {}
 
         # Entity lists
-        seller_ids = _ids(sellers, "seller_ids", "seller_id") or _ids(
-            shipment, "seller_ids", "seller_id"
+        seller_ids = (
+            _ids(sellers, "seller_ids", "seller_id")
+            or _ids(shipment, "seller_ids", "seller_id")
+            or _extract_ids_from_list(items_raw, "seller_id", "seller_ids")
+            or _extract_ids_from_list(
+                items.get("order_items") or items.get("items") or [], "seller_id"
+            )
         )
         # Also collect seller_ids from responsible_parties
         if not seller_ids:
@@ -131,13 +159,25 @@ class VerifierAgent:
                     if pid and isinstance(pid, str):
                         seller_ids = [pid]
                         break
-        shipment_ids = _ids(shipment, "shipment_ids", "shipment_id")
+        shipment_ids = (
+            _ids(shipment, "shipment_ids", "shipment_id", "tracking_number", "tracking_id", "carrier_tracking_number")
+            or _extract_ids_from_list(
+                shipment.get("shipments") or [], "shipment_id", "tracking_number", "tracking_id"
+            )
+        )
+        # Extract payment_refs from raw data before normalization destroys IDs
         payment_refs = (
-            _ids(payment, "payment_references", "payment_id", "payment_ids")
+            _extract_ids_from_list(raw_payment, "payment_id", "payment_sequential", "payment_reference", "transaction_id")
+            or _ids(payment, "payment_references", "payment_id", "payment_ids")
             or _ids(payment_timeline, "payment_references", "payment_id")
         )
         item_ids = (
-            _ids(items, "item_ids", "order_item_ids", "items")
+            _ids(items, "item_ids", "order_item_ids")
+            or _extract_ids_from_list(
+                items.get("order_items") or items.get("items") or [],
+                "order_item_id", "item_id", "product_id"
+            )
+            or _extract_ids_from_list(items_raw, "order_item_id", "item_id", "product_id")
             or _ids(product_context, "item_ids", "product_ids", "items")
             or _ids(customer, "item_ids", "order_item_ids")
         )
